@@ -1,5 +1,5 @@
 <template>
-  <div class="fullscreen-bg"></div>
+  <canvas class="fullscreen-bg" ref="bgCanvas"></canvas>
   <canvas class="particle-canvas left" ref="leftParticles"></canvas>
   <canvas class="particle-canvas right" ref="rightParticles"></canvas>
 
@@ -9,15 +9,18 @@
 
   <div class="llm-chat-container">
     <div class="chat-history" ref="chatHistory">
+      <div v-if="chatHistory.length === 0" class="empty-tip">
+        请输入论文主题，点击生成论文开始对话
+      </div>
       <div v-for="(msg, idx) in chatHistory" :key="idx" :class="['chat-msg', msg.role]">
-        <span class="role-label">{{ msg.role === 'user' ? '我' : '系统' }}:</span>
+        <span class="role-label">{{ msg.role === 'user' ? '我' : 'OpenClaw' }}:</span>
         <template v-if="msg.loading">
           <span class="loading-bubble">
             <span class="dot"></span><span class="dot"></span><span class="dot"></span>
           </span>
         </template>
         <template v-else>
-          {{ msg.content }}
+          <pre style="white-space: pre-wrap; font-family: inherit; margin: 0;">{{ msg.content }}</pre>
         </template>
       </div>
     </div>
@@ -35,23 +38,80 @@
 </template>
 
 <script>
+import api from '../api.js'
+
 export default {
+  props: ['quota'],
+  emits: ['update-quota'],
   data() {
     return {
       chatInput: '',
       chatHistory: [],
-      isSending: false
+      isSending: false,
+      bgAnimation: null
     }
   },
   mounted() {
+    this.initCustomBackground()
     this.initParticles(this.$refs.leftParticles);
     this.initParticles(this.$refs.rightParticles);
     window.addEventListener('resize', this.handleResize);
   },
   beforeUnmount() {
+    cancelAnimationFrame(this.bgAnimation)
     window.removeEventListener('resize', this.handleResize);
   },
   methods: {
+      initCustomBackground() {
+      const canvas = this.$refs.bgCanvas
+      if (!canvas) return
+      const ctx = canvas.getContext('2d')
+
+      const resize = () => {
+        canvas.width = window.innerWidth
+        canvas.height = window.innerHeight
+      }
+      resize()
+      window.addEventListener('resize', resize)
+
+      const particles = []
+      for (let i = 0; i < 4000; i++) {
+        particles.push({
+          x: Math.random() * canvas.width,
+          y: Math.random() * canvas.height,
+          vx: (Math.random() - 0.5) * 0.05, 
+          vy: (Math.random() - 0.5) * 0.05, 
+          size: Math.random() * 1.3 + 0.2,
+          alpha: Math.random() * 0.06 + 0.01
+        })
+      }
+
+      const draw = () => {
+        const gradient = ctx.createRadialGradient(
+          canvas.width / 2, canvas.height / 3, 0,
+          canvas.width / 2, canvas.height / 2, canvas.width
+        )
+        gradient.addColorStop(0, '#2b2f36')
+        gradient.addColorStop(1, '#1a1c20')
+        ctx.fillStyle = gradient
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+        particles.forEach(p => {
+          p.x += p.vx
+          p.y += p.vy
+          if (p.x < 0 || p.x > canvas.width) p.vx *= -1
+          if (p.y < 0 || p.y > canvas.height) p.vy *= -1
+
+          ctx.beginPath()
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2)
+          ctx.fillStyle = `rgba(255,255,255,${p.alpha})`
+          ctx.fill()
+        })
+
+        this.bgAnimation = requestAnimationFrame(draw)
+      }
+      draw()
+    },
     handleResize() {
       [this.$refs.leftParticles, this.$refs.rightParticles].forEach(canvas => {
         if (canvas) canvas.height = window.innerHeight;
@@ -80,7 +140,7 @@ export default {
           if (p.y < -10) p.y = height + Math.random() * 100;
           ctx.beginPath();
           ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(0,0,0,${p.alpha})`;
+          ctx.fillStyle = `rgba(255,255,255,${p.alpha})`;
           ctx.fill();
         });
         requestAnimationFrame(animate);
@@ -95,9 +155,13 @@ export default {
         }
       });
     },
-    sendMsg() {
+    async sendMsg() {
       const topic = this.chatInput.trim();
       if (!topic || this.isSending) return;
+      if (this.quota <= 0) {
+        alert('生成次数已用完，请联系管理员')
+        return
+      }
 
       this.isSending = true;
       this.chatHistory.push({ role: 'user', content: topic });
@@ -108,35 +172,18 @@ export default {
       this.scrollToBottom();
       const idx = this.chatHistory.indexOf(assistantMsg);
 
-      // 模拟论文生成（前端直出，不连后端）
-      setTimeout(() => {
-        this.chatHistory[idx].content = `# ${topic}
-
-## 摘要
-本文基于Vue3实现毕业论文自动化生成系统，采用OpenClaw引擎完成结构化内容输出，有效降低论文撰写门槛，提升创作效率。
-
-## 一、引言
-当前高校学生在毕业论文撰写过程中普遍面临灵感不足、格式繁琐、效率低下等问题。本项目以轻量化AI辅助为核心，提供一站式论文生成方案。
-
-## 二、系统设计
-1. 前端采用Vue3组件化开发，实现LLM风格交互界面。
-2. 核心逻辑采用模块化设计，支持主题输入、内容生成、结果展示。
-3. 严格遵循合规要求，生成内容仅作为灵感参考。
-
-## 三、功能实现
-- 论文主题输入
-- 实时流式展示
-- 论文结构自动排版
-- 支持导出与二次编辑
-
-
-## 四、总结
-本系统完成MVP核心功能，界面美观、交互流畅、体验接近主流大模型产品，可直接用于课程设计与作业展示。
-`;
+      try {
+        const res = await api.generate(topic)
+        this.chatHistory[idx].content = res.data.content;
         this.chatHistory[idx].loading = false;
+        this.$emit('update-quota', res.data.remaining_quota)
+      } catch (err) {
+        this.chatHistory[idx].content = '生成失败：' + (err.response?.data?.detail || err.message || '未知错误');
+        this.chatHistory[idx].loading = false;
+      } finally {
         this.isSending = false;
         this.scrollToBottom();
-      }, 1500);
+      }
     }
   }
 }
@@ -183,8 +230,8 @@ vertical-align: middle;
   padding-top: 20px;
 }
 .prts-bg{
-  width: 300px;
-  height: 300px;
+  width: 200px;
+  height: 200px;
   background-image: url('@/assets/prts.png');
   background-size: contain;
   background-repeat: no-repeat;
@@ -208,17 +255,19 @@ vertical-align: middle;
 .llm-chat-container {
   position: absolute;
   left: 50%;
-  top: 26%;
+  top: 30%;
   transform: translateX(-50%);
-  width: min(1040px, 88vw);
+  width: min(1080px, 94vw);
   background: rgba(255,255,255,0.85);
   border-radius: 10px;
+  backdrop-filter: blur(10px);
   box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-  padding: 18px 26px 14px 26px;
+  padding: 24px 25px 20px 20px; 
   z-index: 20;
 }
 .chat-history {
-  max-height: 340px;
+  max-height: 500px; 
+  min-height: 500px; 
   overflow-y: auto;
   margin-bottom: 14px;
   font-size: 15px;
@@ -280,5 +329,18 @@ left: 0;
 }
 .particle-canvas.right {
 right: 0;
+}
+
+.fullscreen-bg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  display: block;
+}
+.fullscreen-bg, .particle-canvas {
+  pointer-events: none; 
 }
 </style>

@@ -1,8 +1,8 @@
 <template>
   <div class="app">
     <div v-if="!isLogin">
-      <Login @login-success="handleLogin" />
-      <Register v-if="showReg" @to-login="showReg = false" />
+      <Login v-if="!showReg" @login-success="handleLogin" @to-register="showReg = true" />
+      <Register v-else @register-success="handleRegister" @to-login="showReg = false" />
     </div>
 
     <div v-else>
@@ -16,24 +16,44 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
+import api from './api.js'
 import Login from './components/Login.vue'
 import Register from './components/Register.vue'
 import Header from './components/Header.vue'
 import Generate from './components/Generate.vue'
 
-//测试的时候改成true
-const isLogin = ref(true)
+const isLogin = ref(false)
 const showReg = ref(false)
-const quota = ref(5)
+const quota = ref(0)
 
-const handleLogin = () => {
+const handleLogin = (q) => {
   isLogin.value = true
+  quota.value = q
+}
+
+const handleRegister = () => {
+  showReg.value = false
 }
 
 const handleLogout = () => {
+  localStorage.removeItem('token')
   isLogin.value = false
+  quota.value = 0
 }
+
+onMounted(async () => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    try {
+      const res = await api.me()
+      isLogin.value = true
+      quota.value = res.data.quota
+    } catch {
+      localStorage.removeItem('token')
+    }
+  }
+})
 </script>
 
 <style>
